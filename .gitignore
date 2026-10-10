@@ -69,5 +69,9 @@ vcpkg_installed/
 Testing/
 .cache/
 
-#
+# vs-code config
 /.vscode/
+
+# CMake artifacts
+key-value
+kv_store_tests

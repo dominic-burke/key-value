@@ -18,7 +18,8 @@ cmake -S . -B build
 
 `-S .` selects the project source directory and `-B build` keeps generated
 files in a separate build directory. CMake detects the available compiler and
-build system during configuration.
+build system during configuration. In-source builds are rejected so CMake
+metadata cannot be generated alongside the source files.
 
 To choose a generator explicitly, pass `-G`. For example:
 
@@ -68,6 +69,10 @@ The project defines these targets:
   `kv_store`.
 - `kv_store_tests`: the test executable in `tests/store_tests.cpp`. It is
   included when `BUILD_TESTING` is enabled.
+
+Executables and libraries are also written to the selected build directory.
+For multi-configuration generators, CMake may place them in a configuration
+subdirectory such as `build/Debug/`.
 
 ## Run
 

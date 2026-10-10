@@ -2,7 +2,7 @@
 #include <store.hpp>
 
 int main(void) {
-    kv::Store store{};
+    kv::HashStore store{};
 
     store.set("key1", "a1");
 

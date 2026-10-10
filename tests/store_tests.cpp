@@ -16,7 +16,7 @@ bool check(bool condition, std::string_view message)
 
 int main()
 {
-    kv::Store store;
+    kv::HashStore store;
 
     if (!check(store.size() == 0, "new store is empty")
         || !check(!store.get("missing").has_value(), "missing key has no value")) {

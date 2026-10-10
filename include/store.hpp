@@ -5,7 +5,23 @@
 #include <string>
 
 namespace kv {
-class Store {
+
+class Istore {
+public:
+virtual ~Istore() = default;
+
+virtual void set(const std::string& key, const std::string& value) = 0;
+
+virtual auto get(const std::string& key) const -> std::optional<std::string> = 0;
+
+virtual auto erase(const std::string& key) -> bool = 0; 
+
+virtual auto size() const noexcept -> std::size_t = 0;
+
+};
+
+
+class HashStore final : public Istore{
 public:
     void set(const std::string& key, const std::string& value);
 

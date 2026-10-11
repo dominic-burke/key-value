@@ -7,7 +7,6 @@ Istore::~Istore() = default;
 
 void HashStore::set(const std::string &key, const std::string &value)
 {
-    // move here to stop copies
     data_.insert_or_assign(std::move(key), std::move(value));
 }
 

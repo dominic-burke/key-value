@@ -45,6 +45,36 @@ an incomplete final record is truncated back to the end of the last verified
 record so earlier records can be recovered safely. The checksum format is
 version 2.
 
+## Command parser
+
+`include/command_parser.hpp` exposes `parse_commands`, which parses a byte
+span into command values without executing them. Commands are newline-delimited
+and use uppercase names with whitespace-separated, printable ASCII tokens:
+
+```text
+SET key value
+GET key
+DEL key
+```
+
+`SET` requires exactly a key and value; `GET` and `DEL` each require exactly
+one key. Blank lines are ignored, and the final command does not need a
+trailing newline. Tokens cannot contain spaces or quotes. Malformed input
+throws `CommandParseError`.
+
+For example:
+
+```cpp
+#include <command_parser.hpp>
+
+#include <span>
+#include <string_view>
+
+constexpr std::string_view input = "SET color blue\nGET color\n";
+const auto commands = parse_commands(
+    std::as_bytes(std::span{input.data(), input.size()}));
+```
+
 ## Requirements
 
 - CMake 3.20 or newer
@@ -98,9 +128,11 @@ The project defines these main targets:
 - `kv_logging`: append-only log record serialization and replay.
 - `kv_persistent_store`: the persistent store, linked with the store and
   logging libraries.
-- `key-value`: a small demonstration executable using `HashStore`.
-- `kv_store_tests`, `kv_logging_tests`, and `kv_persistent_store_tests`: test
-  executables, included when `BUILD_TESTING` is enabled.
+- `kv_command_parser`: newline-delimited command parsing from byte spans.
+- `key-value`: a small demonstration executable using `PersistentStore`.
+- `kv_store_tests`, `kv_logging_tests`, `kv_command_parser_tests`, and
+  `kv_persistent_store_tests`: test executables, included when `BUILD_TESTING`
+  is enabled.
 
 Executables and libraries are written to the selected build directory. For
 multi-configuration generators, CMake may place them in a configuration
@@ -127,14 +159,15 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The tests cover in-memory store behavior and concurrency, log record parsing
-(including malformed records and size boundaries), and a persistent-store
-round trip that reopens the log and verifies replayed sets and deletes. A
-separate two-process test exits immediately after flushing a log record but
-before applying it in memory, then verifies that a new process recovers that
-record from the log. The tests also check recovery and truncation of an
-incomplete final record. Stream flushing covers process termination, but does
-not guarantee persistence through power loss or an operating-system crash.
+The tests cover in-memory store behavior and concurrency, command parsing,
+log record parsing (including malformed records and size boundaries), and a
+persistent-store round trip that reopens the log and verifies replayed sets
+and deletes. A separate two-process test exits immediately after flushing a
+log record but before applying it in memory, then verifies that a new process
+recovers that record from the log. The tests also check recovery and truncation
+of an incomplete final record. Stream flushing covers process termination,
+but does not guarantee persistence through power loss or an operating-system
+crash.
 Run a specific test by name, for example:
 
 ```sh

@@ -15,7 +15,7 @@ constexpr std::array<char, 4> MAGIC{
     // key value log file
     'K', 'V', 'L', 'F'};
 
-constexpr std::uint8_t VERSION = 1;
+constexpr std::uint8_t VERSION = 2;
 
 constexpr std::uint32_t MAX_KEY_SIZE = 64 * 1024;
 

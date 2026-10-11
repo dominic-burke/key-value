@@ -3,9 +3,28 @@
 #include <format>
 #include <vector>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 #include <store.hpp>
+
+namespace
+{
+    auto crc32(std::string_view bytes) -> std::uint32_t
+    {
+        std::uint32_t crc = 0xffffffffU;
+        for (const unsigned char byte : bytes)
+        {
+            crc ^= byte;
+            for (int bit = 0; bit < 8; ++bit)
+            {
+                const std::uint32_t mask = 0U - (crc & 1U);
+                crc = (crc >> 1) ^ (0xedb88320U & mask);
+            }
+        }
+        return crc ^ 0xffffffffU;
+    }
+}
 
 CorruptLog::CorruptLog()
     : reason_{"No reason provided"}
@@ -62,7 +81,7 @@ auto read_u32(std::istream &in) -> std::uint32_t
         bytes.size());
 
     if (!in)
-        throw std::runtime_error("Failed to read u32");
+        throw TruncatedRecord{};
 
     return (
         static_cast<std::uint32_t>(bytes[0] << 24) |
@@ -73,31 +92,35 @@ auto read_u32(std::istream &in) -> std::uint32_t
 
 void write_record(std::ostream &out, const LogRecord &record)
 {
-    out.write(MAGIC.data(), MAGIC.size());
+    std::ostringstream body{std::ios::out | std::ios::binary};
+    body.write(MAGIC.data(), static_cast<std::streamsize>(MAGIC.size()));
 
-    out.put(
-        static_cast<char>(VERSION));
+    body.put(static_cast<char>(VERSION));
 
-    out.put(
-        static_cast<char>(record.opcode));
-
-    write_u32(
-        out,
-        static_cast<std::uint32_t>(
-            record.key.size()));
+    body.put(static_cast<char>(record.opcode));
 
     write_u32(
-        out,
-        static_cast<std::uint32_t>(
-            record.value.size()));
+        body,
+        static_cast<std::uint32_t>(record.key.size()));
 
-    out.write(
+    write_u32(
+        body,
+        static_cast<std::uint32_t>(record.value.size()));
+
+    body.write(
         record.key.data(),
-        record.key.size());
+        static_cast<std::streamsize>(record.key.size()));
 
-    out.write(
+    body.write(
         record.value.data(),
-        record.value.size());
+        static_cast<std::streamsize>(record.value.size()));
+
+    if (!body)
+        throw std::runtime_error("Failed to serialize log record");
+
+    const std::string bytes = body.str();
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    write_u32(out, crc32(bytes));
 
     if (!out)
         throw std::runtime_error("Failed to write log record");
@@ -121,15 +144,20 @@ auto read_record(std::istream &in) -> std::optional<LogRecord>
         throw CorruptLog{
             "Invalid record magic"};
 
+    std::ostringstream checksum_data{std::ios::out | std::ios::binary};
+    checksum_data.write(magic.data(), static_cast<std::streamsize>(magic.size()));
+
     int version = ingest_byte(in);
     if (static_cast<std::uint8_t>(version) != VERSION)
         throw CorruptLog{std::string{"Unsupported log version"}};
+    checksum_data.put(static_cast<char>(version));
 
     int raw_opcode = ingest_byte(in);
     auto opcode = parse_opcode(raw_opcode);
     // check std::nullopt
     if (!opcode)
         throw CorruptLog{std::format("Opcode not in list: {}", raw_opcode)};
+    checksum_data.put(static_cast<char>(raw_opcode));
 
     std::uint32_t key_size = read_u32(in);
     std::uint32_t value_size = read_u32(in);
@@ -148,17 +176,26 @@ auto read_record(std::istream &in) -> std::optional<LogRecord>
     if (*opcode == OpCode::Delete && value_size != 0)
         throw CorruptLog{std::string{"Delete record does not have 0 value size"}};
 
+    write_u32(checksum_data, key_size);
+    write_u32(checksum_data, value_size);
+
     std::string key(key_size, '\0');
     if (!key.empty())
         in.read(key.data(), static_cast<std::streamsize>(key.size()));
     if (!in)
         throw TruncatedRecord{};
+    checksum_data.write(key.data(), static_cast<std::streamsize>(key.size()));
 
     std::string value(value_size, '\0');
     if (!value.empty())
         in.read(value.data(), static_cast<std::streamsize>(value.size()));
     if (!in)
         throw TruncatedRecord{};
+    checksum_data.write(value.data(), static_cast<std::streamsize>(value.size()));
+
+    const std::uint32_t expected_checksum = read_u32(in);
+    if (expected_checksum != crc32(checksum_data.str()))
+        throw CorruptLog{"Record checksum mismatch"};
 
     return LogRecord{
         .opcode = *opcode,

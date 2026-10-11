@@ -75,6 +75,13 @@ namespace
         return read_record(in);
     }
 
+    auto serialize_record(const LogRecord &record) -> std::string
+    {
+        std::ostringstream out{std::ios::out | std::ios::binary};
+        write_record(out, record);
+        return out.str();
+    }
+
     bool test_empty_key()
     {
         const auto bytes = make_record_bytes(
@@ -96,12 +103,8 @@ namespace
     bool test_maximum_key()
     {
         const std::string key(MAX_KEY_SIZE, 'k');
-        const auto bytes = make_record_bytes(
-            static_cast<std::uint8_t>(OpCode::Set),
-            MAX_KEY_SIZE,
-            1,
-            key,
-            "v");
+        const auto bytes = serialize_record(
+            LogRecord{OpCode::Set, key, "v"});
         const auto record = read_bytes(bytes);
         return check(
             record && record->key == key && record->value == "v",
@@ -111,12 +114,8 @@ namespace
     bool test_maximum_value()
     {
         const std::string value(MAX_VALUE_SIZE, 'v');
-        const auto bytes = make_record_bytes(
-            static_cast<std::uint8_t>(OpCode::Set),
-            1,
-            MAX_VALUE_SIZE,
-            "k",
-            value);
+        const auto bytes = serialize_record(
+            LogRecord{OpCode::Set, "k", value});
         const auto record = read_bytes(bytes);
         return check(
             record && record->key == "k" && record->value == value,
@@ -125,8 +124,8 @@ namespace
 
     bool test_delete_record()
     {
-        const auto bytes = make_record_bytes(
-            static_cast<std::uint8_t>(OpCode::Delete), 1, 0, "k");
+        const auto bytes = serialize_record(
+            LogRecord{OpCode::Delete, "k", {}});
         const auto record = read_bytes(bytes);
         return check(
             record && record->opcode == OpCode::Delete
@@ -179,6 +178,15 @@ namespace
             throws<CorruptLog>([&] { read_bytes(bytes); }),
             "oversized value length is rejected");
     }
+
+    bool test_checksum_mismatch()
+    {
+        auto bytes = serialize_record(LogRecord{OpCode::Set, "k", "v"});
+        bytes[14] ^= 1;
+        return check(
+            throws<CorruptLog>([&] { read_bytes(bytes); }),
+            "checksum mismatch is rejected");
+    }
 }
 
 int main()
@@ -194,5 +202,6 @@ int main()
     passed &= run_test("unsupported version", test_unsupported_version);
     passed &= run_test("oversized key length", test_oversized_key_length);
     passed &= run_test("oversized value length", test_oversized_value_length);
+    passed &= run_test("checksum mismatch", test_checksum_mismatch);
     return passed ? 0 : 1;
 }

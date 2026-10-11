@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string_view>
 #include <system_error>
@@ -83,13 +84,55 @@ namespace
 
         return true;
     }
+
+    bool test_replay_rejects_checksum_mismatch()
+    {
+        TemporaryLog log;
+        {
+            PersistentStore store{log.path()};
+            store.set("key", "value");
+        }
+
+        {
+            std::fstream file{
+                log.path(),
+                std::ios::in | std::ios::out | std::ios::binary};
+            if (!check(static_cast<bool>(file), "open log to corrupt checksum"))
+                return false;
+
+            file.seekg(-1, std::ios::end);
+            char last_byte{};
+            file.get(last_byte);
+            if (!check(static_cast<bool>(file), "read final checksum byte"))
+                return false;
+
+            last_byte ^= 1;
+            file.seekp(-1, std::ios::end);
+            file.put(last_byte);
+            if (!check(static_cast<bool>(file), "corrupt final checksum byte"))
+                return false;
+        }
+
+        try
+        {
+            PersistentStore corrupted{log.path()};
+        }
+        catch (const CorruptLog &)
+        {
+            return true;
+        }
+
+        return check(false, "replay rejects a checksum mismatch");
+    }
 }
 
 int main()
 {
     try
     {
-        return test_persistent_store_round_trip() ? 0 : 1;
+        if (!test_persistent_store_round_trip())
+            return 1;
+        return test_replay_rejects_checksum_mismatch() ? 0 : 1;
     }
     catch (const std::exception &error)
     {

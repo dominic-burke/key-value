@@ -38,8 +38,9 @@ int main()
 
 The log format currently supports non-empty keys and non-empty `Set` values,
 with a maximum size of 64 KiB for each. `Delete` records contain a key and no
-value. Log records have a magic header, format version, opcode, and lengths;
-invalid or truncated records are rejected during replay.
+value. Log records have a magic header, format version, opcode, lengths, and a
+CRC-32 checksum trailer. Replay rejects invalid records and checksum mismatches;
+truncated records are reported as truncated. The checksum format is version 2.
 
 ## Requirements
 

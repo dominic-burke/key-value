@@ -17,7 +17,8 @@ Available implementations:
 - `HashStore`: an in-memory store.
 - `ConcurrentStore`: an in-memory store protected for concurrent access.
 - `PersistentStore`: stores values in memory and appends changes to a log file.
-  On construction, it replays the log to restore the stored values.
+  It flushes each appended record before applying the change to memory. On
+  construction, it replays the log to restore the stored values.
 
 Example:
 
@@ -126,7 +127,11 @@ ctest --test-dir build --output-on-failure
 
 The tests cover in-memory store behavior and concurrency, log record parsing
 (including malformed records and size boundaries), and a persistent-store
-round trip that reopens the log and verifies replayed sets and deletes.
+round trip that reopens the log and verifies replayed sets and deletes. A
+separate two-process test exits immediately after flushing a log record but
+before applying it in memory, then verifies that a new process recovers that
+record from the log. Stream flushing covers process termination, but does not
+guarantee persistence through power loss or an operating-system crash.
 Run a specific test by name, for example:
 
 ```sh

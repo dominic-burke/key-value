@@ -24,6 +24,13 @@ namespace
         }
         return crc ^ 0xffffffffU;
     }
+
+    void flush_log(std::ofstream &out)
+    {
+        out.flush();
+        if (!out)
+            throw std::runtime_error("Failed to flush log record");
+    }
 }
 
 CorruptLog::CorruptLog()
@@ -215,11 +222,13 @@ void AppendOnlyLog::append_set(std::string_view key, std::string_view value)
     if (value.length() == 0)
         throw std::runtime_error("Attempt to write 0-length value");
     write_record(out_, LogRecord{OpCode::Set, std::string{key}, std::string{value}});
+    flush_log(out_);
 }
 
 void AppendOnlyLog::append_delete(std::string_view key)
 {
     write_record(out_, LogRecord{OpCode::Delete, std::string{key}});
+    flush_log(out_);
 }
 
 void AppendOnlyLog::replay(Istore &store)

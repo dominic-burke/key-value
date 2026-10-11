@@ -1,6 +1,7 @@
 #include <persistent_store.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -124,12 +125,62 @@ namespace
 
         return check(false, "replay rejects a checksum mismatch");
     }
+
+    int simulate_crash_after_log_append(const std::filesystem::path &path)
+    {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+        if (error)
+        {
+            std::cerr << "Failed to remove old crash-recovery log: "
+                      << error.message() << '\n';
+            return 1;
+        }
+
+        AppendOnlyLog log{path};
+        log.append_set("crash-key", "recovered-value");
+        std::_Exit(0);
+    }
+
+    int verify_crash_recovery(const std::filesystem::path &path)
+    {
+        bool passed = false;
+        try
+        {
+            PersistentStore recovered{path};
+            passed = recovered.get("crash-key") == "recovered-value"
+                && recovered.size() == 1;
+        }
+        catch (const std::exception &error)
+        {
+            std::cerr << "Recovery after simulated process crash failed: "
+                      << error.what() << '\n';
+        }
+
+        std::error_code error;
+        std::filesystem::remove(path, error);
+        if (error)
+        {
+            std::cerr << "Failed to remove crash-recovery log: "
+                      << error.message() << '\n';
+            passed = false;
+        }
+
+        if (!passed)
+            std::cerr << "FAILED: replay restores the flushed record after restart\n";
+        return passed ? 0 : 1;
+    }
 }
 
-int main()
+int main(int argc, char **argv)
 {
     try
     {
+        if (argc == 3 && std::string_view{argv[1]} == "--crash-after-log-append")
+            return simulate_crash_after_log_append(argv[2]);
+        if (argc == 3 && std::string_view{argv[1]} == "--verify-crash-recovery")
+            return verify_crash_recovery(argv[2]);
+
         if (!test_persistent_store_round_trip())
             return 1;
         return test_replay_rejects_checksum_mismatch() ? 0 : 1;

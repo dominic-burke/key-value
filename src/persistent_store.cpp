@@ -8,8 +8,8 @@ PersistentStore::PersistentStore(const std::filesystem::path &path)
 
 void PersistentStore::set(const std::string &key, const std::string &value)
 {
-    store_.set(key, value);
     log_.append_set(key, value);
+    store_.set(key, value);
 }
 
 auto PersistentStore::get(const std::string &key) const -> std::optional<std::string>

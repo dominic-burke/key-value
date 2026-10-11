@@ -40,4 +40,19 @@ if(BUILD_TESTING)
     add_executable(kv_persistent_store_tests tests/persistent_store_tests.cpp)
     target_link_libraries(kv_persistent_store_tests PRIVATE kv_persistent_store)
     add_test(NAME kv_persistent_store_tests COMMAND kv_persistent_store_tests)
+
+    set(PERSISTENT_STORE_CRASH_LOG
+        "${CMAKE_CURRENT_BINARY_DIR}/persistent_store_crash_recovery.log")
+    add_test(
+        NAME kv_persistent_store_crash_write
+        COMMAND kv_persistent_store_tests
+            --crash-after-log-append "${PERSISTENT_STORE_CRASH_LOG}")
+    set_tests_properties(kv_persistent_store_crash_write PROPERTIES
+        FIXTURES_SETUP persistent_store_crash_recovery)
+    add_test(
+        NAME kv_persistent_store_crash_recovery
+        COMMAND kv_persistent_store_tests
+            --verify-crash-recovery "${PERSISTENT_STORE_CRASH_LOG}")
+    set_tests_properties(kv_persistent_store_crash_recovery PROPERTIES
+        FIXTURES_REQUIRED persistent_store_crash_recovery)
 endif()

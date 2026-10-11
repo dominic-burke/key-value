@@ -14,6 +14,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 add_library(kv_store src/store.cpp)
+add_library(kv_logging src/logging.cpp)
 target_include_directories(kv_store PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(kv_store PUBLIC cxx_std_20)
 

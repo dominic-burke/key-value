@@ -1,17 +1,20 @@
 #include <iostream>
-#include <store.hpp>
+#include <persistent_store.hpp>
 
-int main(void) {
-    HashStore store{};
+int main()
+{
+    PersistentStore store{"store.log"};
 
-    store.set("key1", "a1");
+    store.set("color", "blue");
 
-    auto value = store.get("key1");
+    const auto value = store.get("color");
 
-    if (value) {
-        std::cout << "Value for key1: " << *value << std::endl;
+    if (value)
+    {
+        std::cout << "Value for color: " << *value << '\n';
     }
-    else {
-        std::cout << "Key not found" << std::endl;
+    else
+    {
+        std::cout << "Key not found\n";
     }
 }

@@ -25,7 +25,7 @@ target_compile_features(kv_persistent_store PUBLIC cxx_std_20)
 target_link_libraries(kv_persistent_store PUBLIC kv_store kv_logging)
 
 add_executable(key-value main.cpp)
-target_link_libraries(key-value PRIVATE kv_store)
+target_link_libraries(key-value PRIVATE kv_persistent_store)
 
 if(BUILD_TESTING)
     find_package(Threads REQUIRED)

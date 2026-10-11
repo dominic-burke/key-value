@@ -1,7 +1,21 @@
-#include <include/logging.hpp>
+#include <logging.hpp>
+
 #include <format>
 #include <vector>
 #include <fstream>
+#include <stdexcept>
+#include <utility>
+#include <store.hpp>
+
+CorruptLog::CorruptLog()
+    : reason_{"No reason provided"}
+{
+}
+
+CorruptLog::CorruptLog(std::string reason)
+    : reason_{std::move(reason)}
+{
+}
 
 auto parse_opcode(std::uint8_t val) -> std::optional<OpCode>
 {
@@ -30,7 +44,7 @@ void write_u32(std::ostream &out, std::uint32_t value)
     std::array<unsigned char, 4> bytes{
         static_cast<unsigned char>((value >> 24) & 0xff),
         static_cast<unsigned char>((value >> 16) & 0xff),
-        static_cast<unsigned char>((value >> 0) & 0xff),
+        static_cast<unsigned char>((value >> 8) & 0xff),
         static_cast<unsigned char>(value & 0xff),
     };
 
@@ -125,10 +139,13 @@ auto read_record(std::istream &in) -> std::optional<LogRecord>
     if (value_size > MAX_VALUE_SIZE)
         throw CorruptLog{std::format("Value size too large: {}", value_size)};
 
-    if (key_size == 0 || value_size == 0)
-        throw CorruptLog{std::string{"Key or value size equal to 0"}};
+    if (key_size == 0)
+        throw CorruptLog{std::string{"Key size equal to 0"}};
 
-    if (opcode == OpCode::Delete && value_size != 0)
+    if (*opcode == OpCode::Set && value_size == 0)
+        throw CorruptLog{std::string{"Set record has 0 value size"}};
+
+    if (*opcode == OpCode::Delete && value_size != 0)
         throw CorruptLog{std::string{"Delete record does not have 0 value size"}};
 
     std::string key(key_size, '\0');
@@ -149,6 +166,13 @@ auto read_record(std::istream &in) -> std::optional<LogRecord>
         .value = value};
 }
 
+AppendOnlyLog::AppendOnlyLog(std::filesystem::path path)
+    : out_(path, std::ios::binary | std::ios::app), path_{std::move(path)}
+{
+    if (!out_)
+        throw std::runtime_error("AppendOnlyLog failed to open its file path");
+}
+
 void AppendOnlyLog::append_set(std::string_view key, std::string_view value)
 {
     if (value.length() == 0)
@@ -161,7 +185,7 @@ void AppendOnlyLog::append_delete(std::string_view key)
     write_record(out_, LogRecord{OpCode::Delete, std::string{key}});
 }
 
-void AppendOnlyLog::replay(kv::Istore &store)
+void AppendOnlyLog::replay(Istore &store)
 {
     out_.flush();
     if (!out_) throw std::runtime_error("Failed to flush out_");

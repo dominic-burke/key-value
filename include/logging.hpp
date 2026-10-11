@@ -5,8 +5,11 @@
 #include <istream>
 #include <exception>
 #include <filesystem>
-#include <utility>
-#include <include/store.hpp>
+#include <fstream>
+#include <string>
+#include <string_view>
+
+class Istore;
 
 constexpr std::array<char, 4> MAGIC{
     // key value log file
@@ -38,14 +41,8 @@ class TruncatedRecord : public std::exception
 class CorruptLog : public std::exception
 {
 public:
-    explicit CorruptLog()
-        : reason_("No reason provided")
-    {
-    }
-    explicit CorruptLog(std::string reason)
-        : reason_{reason}
-    {
-    }
+    explicit CorruptLog();
+    explicit CorruptLog(std::string reason);
 
 private:
     std::string reason_;
@@ -62,18 +59,13 @@ auto read_record(std::istream &in) -> std::optional<LogRecord>;
 class AppendOnlyLog
 {
 public:
-    explicit AppendOnlyLog(std::filesystem::path path)
-        : out_(path, std::ios::binary | std::ios::app), path_{path}
-    {
-        if (!out_)
-            throw std::runtime_error("AppendOnlyLog failed to open its file path");
-        
-    }
+    explicit AppendOnlyLog(std::filesystem::path path);
+
     void append_set(std::string_view key, std::string_view value);
 
     void append_delete(std::string_view key);
 
-    void replay(kv::Istore &istore);
+    void replay(Istore &istore);
 
 private:
     std::ofstream out_;

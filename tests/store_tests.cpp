@@ -20,7 +20,7 @@ namespace
 
 int test_basic(void)
 {
-    kv::HashStore store{};
+    HashStore store{};
 
     if (!check(store.size() == 0, "new store is empty") || !check(!store.get("missing").has_value(), "missing key has no value"))
     {
@@ -50,7 +50,7 @@ int test_basic(void)
 int concurrent_storage_test(void)
 {
     std::vector<std::thread> threads{};
-    kv::ConcurrentStore store{};
+    ConcurrentStore store{};
 
     for (auto i = 0; i < 8; i++)
     {

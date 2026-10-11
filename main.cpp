@@ -1,20 +1,19 @@
 #include <iostream>
 #include <persistent_store.hpp>
+#include <server.hpp>
 
 int main()
 {
-    PersistentStore store{"store.log"};
-
-    store.set("color", "blue");
-
-    const auto value = store.get("color");
-
-    if (value)
+    try
     {
-        std::cout << "Value for color: " << *value << '\n';
+        PersistentStore store{"store.log"};
+        std::cout << "Listening for TCP commands on port "
+                  << DEFAULT_SERVER_PORT << '\n';
+        start_server(store);
     }
-    else
+    catch (const std::exception &error)
     {
-        std::cout << "Key not found\n";
+        std::cerr << "Server failed: " << error.what() << '\n';
+        return 1;
     }
 }

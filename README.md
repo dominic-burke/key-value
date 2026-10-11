@@ -60,7 +60,13 @@ DEL key
 `SET` requires exactly a key and value; `GET` and `DEL` each require exactly
 one key. Blank lines are ignored, and the final command does not need a
 trailing newline. Tokens cannot contain spaces or quotes. Malformed input
-throws `CommandParseError`.
+throws `CommandParseError`. The TCP server buffers incoming data until each
+newline, so commands may be split across TCP reads. It enforces a 1 KiB
+maximum command line.
+
+The server replies `OK` for successful `SET` and `DEL`, `VALUE <value>` for a
+successful `GET`, `NOT_FOUND` for missing keys, and `ERR <message>` for invalid
+commands. Each response ends with a newline.
 
 For example:
 
@@ -78,7 +84,7 @@ const auto commands = parse_commands(
 ## Requirements
 
 - CMake 3.20 or newer
-- A C++ compiler with C++20 support
+- A POSIX-compatible operating system and C++20 compiler
 - A build tool supported by CMake, such as Ninja or Make
 
 ## Configure
@@ -129,10 +135,12 @@ The project defines these main targets:
 - `kv_persistent_store`: the persistent store, linked with the store and
   logging libraries.
 - `kv_command_parser`: newline-delimited command parsing from byte spans.
-- `key-value`: a small demonstration executable using `PersistentStore`.
-- `kv_store_tests`, `kv_logging_tests`, `kv_command_parser_tests`, and
-  `kv_persistent_store_tests`: test executables, included when `BUILD_TESTING`
-  is enabled.
+- `kv_server`: POSIX socket handling that parses and executes commands against
+  an `Istore`.
+- `key-value`: the persistent TCP server, listening on port 3490.
+- `kv_store_tests`, `kv_logging_tests`, `kv_command_parser_tests`,
+  `kv_persistent_store_tests`, and `kv_server_tests`: test executables,
+  included when `BUILD_TESTING` is enabled.
 
 Executables and libraries are written to the selected build directory. For
 multi-configuration generators, CMake may place them in a configuration
@@ -146,8 +154,20 @@ After building, run the `key-value` executable. For example, on Linux:
 ./build/key-value
 ```
 
-The demonstration stores and prints a sample value using `PersistentStore`.
-It creates or appends to `store.log` in the executable's working directory.
+The server stores data in `store.log` in its working directory. It listens on
+TCP port 3490 and handles one client at a time. For example, with `nc`:
+
+```sh
+printf 'SET color blue\nGET color\nDEL color\n' | nc 127.0.0.1 3490
+```
+
+The response is:
+
+```text
+OK
+VALUE blue
+OK
+```
 
 ## Tests
 
@@ -160,7 +180,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 The tests cover in-memory store behavior and concurrency, command parsing,
-log record parsing (including malformed records and size boundaries), and a
+socket request handling (including fragmented and oversized requests), log
+record parsing (including malformed records and size boundaries), and a
 persistent-store round trip that reopens the log and verifies replayed sets
 and deletes. A separate two-process test exits immediately after flushing a
 log record but before applying it in memory, then verifies that a new process

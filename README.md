@@ -41,7 +41,9 @@ The log format currently supports non-empty keys and non-empty `Set` values,
 with a maximum size of 64 KiB for each. `Delete` records contain a key and no
 value. Log records have a magic header, format version, opcode, lengths, and a
 CRC-32 checksum trailer. Replay rejects invalid records and checksum mismatches;
-truncated records are reported as truncated. The checksum format is version 2.
+an incomplete final record is truncated back to the end of the last verified
+record so earlier records can be recovered safely. The checksum format is
+version 2.
 
 ## Requirements
 
@@ -130,8 +132,9 @@ The tests cover in-memory store behavior and concurrency, log record parsing
 round trip that reopens the log and verifies replayed sets and deletes. A
 separate two-process test exits immediately after flushing a log record but
 before applying it in memory, then verifies that a new process recovers that
-record from the log. Stream flushing covers process termination, but does not
-guarantee persistence through power loss or an operating-system crash.
+record from the log. The tests also check recovery and truncation of an
+incomplete final record. Stream flushing covers process termination, but does
+not guarantee persistence through power loss or an operating-system crash.
 Run a specific test by name, for example:
 
 ```sh

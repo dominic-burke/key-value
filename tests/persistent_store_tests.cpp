@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string_view>
 #include <system_error>
 
@@ -126,6 +127,68 @@ namespace
         return check(false, "replay rejects a checksum mismatch");
     }
 
+    bool test_replay_truncates_incomplete_tail()
+    {
+        TemporaryLog log;
+        std::uintmax_t complete_log_size{};
+        {
+            PersistentStore store{log.path()};
+            store.set("first", "one");
+            store.set("second", "two");
+        }
+        complete_log_size = std::filesystem::file_size(log.path());
+
+        std::ostringstream incomplete_record{std::ios::out | std::ios::binary};
+        write_record(
+            incomplete_record,
+            LogRecord{OpCode::Set, "third", "three"});
+        const std::string record_bytes = incomplete_record.str();
+        const auto partial_size = record_bytes.size() / 2;
+        {
+            std::ofstream out{log.path(), std::ios::binary | std::ios::app};
+            if (!check(static_cast<bool>(out), "open log to append incomplete tail"))
+                return false;
+            out.write(
+                record_bytes.data(),
+                static_cast<std::streamsize>(partial_size));
+            if (!check(static_cast<bool>(out), "append incomplete record bytes"))
+                return false;
+        }
+
+        {
+            PersistentStore recovered{log.path()};
+            if (!check(recovered.get("first") == "one",
+                       "replay preserves the first complete record")
+                || !check(recovered.get("second") == "two",
+                          "replay preserves the second complete record")
+                || !check(!recovered.get("third"),
+                          "incomplete record is not applied")
+                || !check(std::filesystem::file_size(log.path()) == complete_log_size,
+                          "incomplete tail is truncated from the file"))
+            {
+                return false;
+            }
+            recovered.set("after-recovery", "usable");
+        }
+
+        {
+            PersistentStore reopened{log.path()};
+            if (!check(reopened.get("first") == "one",
+                       "complete records remain readable after recovery")
+                || !check(reopened.get("second") == "two",
+                          "all earlier records remain readable")
+                || !check(reopened.get("after-recovery") == "usable",
+                          "new records append cleanly after truncation")
+                || !check(!reopened.get("third"),
+                          "truncated record remains absent after another restart"))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     int simulate_crash_after_log_append(const std::filesystem::path &path)
     {
         std::error_code error;
@@ -183,7 +246,9 @@ int main(int argc, char **argv)
 
         if (!test_persistent_store_round_trip())
             return 1;
-        return test_replay_rejects_checksum_mismatch() ? 0 : 1;
+        if (!test_replay_rejects_checksum_mismatch())
+            return 1;
+        return test_replay_truncates_incomplete_tail() ? 0 : 1;
     }
     catch (const std::exception &error)
     {

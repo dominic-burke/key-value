@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 #include <store.hpp>
 
@@ -239,14 +240,38 @@ void AppendOnlyLog::replay(Istore &store)
     std::ifstream in(path_, std::ios::binary);
     if (!in) return;
 
+    std::streamoff last_complete_record_end = 0;
     for (;;)
     {
-        auto record = read_record(in);
+        std::optional<LogRecord> record;
+        try
+        {
+            record = read_record(in);
+        }
+        catch (const TruncatedRecord &)
+        {
+            in.close();
+
+            std::error_code error;
+            std::filesystem::resize_file(
+                path_,
+                static_cast<std::uintmax_t>(last_complete_record_end),
+                error);
+            if (error)
+                throw std::runtime_error(
+                    "Failed to remove incomplete log tail: " + error.message());
+            break;
+        }
 
         if (!record.has_value())
         {
             break;
         }
+
+        const auto record_end = in.tellg();
+        if (record_end == std::ifstream::pos_type(-1))
+            throw std::runtime_error("Failed to determine log record boundary");
+        last_complete_record_end = static_cast<std::streamoff>(record_end);
 
         switch (record->opcode)
         {

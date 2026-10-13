@@ -11,6 +11,30 @@
 
 namespace
 {
+    void validate_record(const LogRecord &record)
+    {
+        if (record.key.empty())
+            throw CorruptLog{"Key size equal to 0"};
+        if (record.key.size() > MAX_KEY_SIZE)
+            throw CorruptLog{std::format("Key size too large: {}", record.key.size())};
+        if (record.value.size() > MAX_VALUE_SIZE)
+            throw CorruptLog{std::format("Value size too large: {}", record.value.size())};
+
+        switch (record.opcode)
+        {
+        case OpCode::Set:
+            if (record.value.empty())
+                throw CorruptLog{"Set record has 0 value size"};
+            break;
+        case OpCode::Delete:
+            if (!record.value.empty())
+                throw CorruptLog{"Delete record does not have 0 value size"};
+            break;
+        default:
+            throw CorruptLog{"Opcode not in list"};
+        }
+    }
+
     auto crc32(std::string_view bytes) -> std::uint32_t
     {
         std::uint32_t crc = 0xffffffffU;
@@ -100,6 +124,8 @@ auto read_u32(std::istream &in) -> std::uint32_t
 
 void write_record(std::ostream &out, const LogRecord &record)
 {
+    validate_record(record);
+
     std::ostringstream body{std::ios::out | std::ios::binary};
     body.write(MAGIC.data(), static_cast<std::streamsize>(MAGIC.size()));
 
@@ -220,8 +246,6 @@ AppendOnlyLog::AppendOnlyLog(std::filesystem::path path)
 
 void AppendOnlyLog::append_set(std::string_view key, std::string_view value)
 {
-    if (value.length() == 0)
-        throw std::runtime_error("Attempt to write 0-length value");
     write_record(out_, LogRecord{OpCode::Set, std::string{key}, std::string{value}});
     flush_log(out_);
 }

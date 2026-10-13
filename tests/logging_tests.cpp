@@ -1,13 +1,46 @@
 #include <logging.hpp>
 
+#include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace
 {
+    class TemporaryLog
+    {
+    public:
+        TemporaryLog()
+            : path_{
+                  std::filesystem::temp_directory_path()
+                  / ("key_value_logging_"
+                     + std::to_string(
+                         std::chrono::steady_clock::now()
+                             .time_since_epoch()
+                             .count())
+                     + ".log")}
+        {
+        }
+
+        ~TemporaryLog()
+        {
+            std::error_code error;
+            std::filesystem::remove(path_, error);
+        }
+
+        auto path() const -> const std::filesystem::path &
+        {
+            return path_;
+        }
+
+    private:
+        std::filesystem::path path_;
+    };
+
     bool check(bool condition, std::string_view message)
     {
         if (!condition)
@@ -187,6 +220,35 @@ namespace
             throws<CorruptLog>([&] { read_bytes(bytes); }),
             "checksum mismatch is rejected");
     }
+
+    bool test_append_rejects_invalid_records_before_writing()
+    {
+        TemporaryLog temporary_log;
+        AppendOnlyLog log{temporary_log.path()};
+        log.append_set("valid", "record");
+        const auto valid_log_size = std::filesystem::file_size(temporary_log.path());
+        const std::string oversized_key(MAX_KEY_SIZE + 1, 'k');
+        const std::string oversized_value(MAX_VALUE_SIZE + 1, 'v');
+
+        const bool rejected = throws<CorruptLog>(
+                                  [&] { log.append_set({}, "value"); })
+            && throws<CorruptLog>(
+                [&] { log.append_set("key", {}); })
+            && throws<CorruptLog>(
+                [&] { log.append_set(oversized_key, "value"); })
+            && throws<CorruptLog>(
+                [&] { log.append_set("key", oversized_value); })
+            && throws<CorruptLog>(
+                [&] { log.append_delete({}); })
+            && throws<CorruptLog>(
+                [&] { log.append_delete(oversized_key); });
+
+        return check(
+            rejected
+                && std::filesystem::file_size(temporary_log.path())
+                    == valid_log_size,
+            "append methods reject invalid records before writing");
+    }
 }
 
 int main()
@@ -203,5 +265,8 @@ int main()
     passed &= run_test("oversized key length", test_oversized_key_length);
     passed &= run_test("oversized value length", test_oversized_value_length);
     passed &= run_test("checksum mismatch", test_checksum_mismatch);
+    passed &= run_test(
+        "append validates before writing",
+        test_append_rejects_invalid_records_before_writing);
     return passed ? 0 : 1;
 }

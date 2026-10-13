@@ -1,9 +1,9 @@
 #include <server.hpp>
+#include <event_server.hpp>
 
 #include <command_parser.hpp>
 #include <store.hpp>
 
-#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstdio>
@@ -18,7 +18,6 @@
 #include <string_view>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <thread>
 #include <unistd.h>
 #include <type_traits>
 #include <utility>
@@ -103,8 +102,7 @@ namespace
         if (getpeername(
                 client_socket,
                 reinterpret_cast<sockaddr *>(&address),
-                &address_size)
-            == -1)
+                &address_size) == -1)
         {
             throw std::runtime_error(
                 std::format("getpeername failed: {}", std::strerror(errno)));
@@ -173,10 +171,9 @@ namespace
         std::fflush(stdout);
     }
 
-    void execute_line(
+    auto execute_commands(
         std::string_view line,
         Istore &store,
-        int client_socket,
         std::string_view client)
     {
         try
@@ -184,9 +181,10 @@ namespace
             const auto *bytes = reinterpret_cast<const std::byte *>(line.data());
             const auto commands = parse_commands(
                 std::span<const std::byte>{bytes, line.size()});
+            std::string response;
             for (const auto &command : commands)
             {
-                const auto response = std::visit(
+                response += std::visit(
                     [&store, client](const auto &parsed) -> std::string
                     {
                         using T = std::decay_t<decltype(parsed)>;
@@ -214,22 +212,24 @@ namespace
                         }
                     },
                     command);
-                send_all(client_socket, response);
             }
+            return response;
         }
         catch (const CommandParseError &error)
         {
-            send_all(client_socket, std::format("ERR {}\n", error.what()));
+            return std::format("ERR {}\n", error.what());
         }
     }
 
-    void log_client_served()
+    void execute_line(
+        std::string_view line,
+        Istore &store,
+        int client_socket,
+        std::string_view client)
     {
-        static std::mutex log_mutex;
-        const std::lock_guard lock{log_mutex};
-        std::fprintf(stdout, "Client served\n");
-        std::fflush(stdout);
+        send_all(client_socket, execute_commands(line, store, client));
     }
+
 }
 
 void serve_client(int client_socket, Istore &store)
@@ -285,81 +285,8 @@ void serve_client(int client_socket, Istore &store)
     }
 }
 
+
 void start_server(Istore &store, std::uint16_t port)
 {
-    const std::string service = std::to_string(port);
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;
-
-    addrinfo *raw_addresses = nullptr;
-    const int lookup_result = getaddrinfo(nullptr, service.c_str(), &hints, &raw_addresses);
-    if (lookup_result != 0)
-        throw std::runtime_error(
-            std::format("getaddrinfo failed: {}", gai_strerror(lookup_result)));
-    const std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> addresses{
-        raw_addresses, freeaddrinfo};
-
-    Socket listener;
-    for (auto *address = addresses.get(); address != nullptr; address = address->ai_next)
-    {
-        Socket candidate{socket(
-            address->ai_family,
-            address->ai_socktype,
-            address->ai_protocol)};
-        if (candidate.get() == -1)
-            continue;
-
-        int reuse_address = 1;
-        if (setsockopt(
-                candidate.get(),
-                SOL_SOCKET,
-                SO_REUSEADDR,
-                &reuse_address,
-                sizeof(reuse_address)) == -1)
-        {
-            throw std::runtime_error(
-                std::format("setsockopt failed: {}", std::strerror(errno)));
-        }
-
-        if (bind(candidate.get(), address->ai_addr, address->ai_addrlen) == 0)
-        {
-            listener = std::move(candidate);
-            break;
-        }
-    }
-
-    if (listener.get() == -1)
-        throw std::runtime_error("Could not bind TCP listening socket");
-    if (listen(listener.get(), 64) == -1)
-        throw std::runtime_error(
-            std::format("listen failed: {}", std::strerror(errno)));
-
-    for (;;)
-    {
-        const int client = accept(listener.get(), nullptr, nullptr);
-        if (client == -1)
-        {
-            if (errno == EINTR)
-                continue;
-            throw std::runtime_error(
-                std::format("accept failed: {}", std::strerror(errno)));
-        }
-
-        std::thread{
-            [client, &store]
-            {
-                Socket client_socket{client};
-                try
-                {
-                    serve_client(client_socket.get(), store);
-                }
-                catch (const std::exception &error)
-                {
-                    std::fprintf(stderr, "Client connection failed: %s\n", error.what());
-                }
-                log_client_served();
-            }}.detach();
-    }
+    run_event_loop(store, port);
 }

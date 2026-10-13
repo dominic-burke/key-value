@@ -1,6 +1,8 @@
 #pragma once
 
 #include <logging.hpp>
+#include <mutex>
+#include <shared_mutex>
 #include <store.hpp>
 
 class PersistentStore final : public Istore
@@ -17,6 +19,7 @@ public:
     auto size() const noexcept -> std::size_t override;
 
 private:
+    mutable std::shared_mutex mutex_;
     AppendOnlyLog log_;
     ConcurrentStore store_;
 };

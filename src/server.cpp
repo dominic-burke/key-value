@@ -10,11 +10,15 @@
 #include <cstring>
 #include <format>
 #include <memory>
+#include <mutex>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <sys/socket.h>
+#include <sys/un.h>
+#include <thread>
 #include <unistd.h>
 #include <type_traits>
 #include <utility>
@@ -92,7 +96,88 @@ namespace
         }
     }
 
-    void execute_line(std::string_view line, Istore &store, int client_socket)
+    auto client_details(int client_socket) -> std::string
+    {
+        sockaddr_storage address{};
+        socklen_t address_size = sizeof(address);
+        if (getpeername(
+                client_socket,
+                reinterpret_cast<sockaddr *>(&address),
+                &address_size)
+            == -1)
+        {
+            throw std::runtime_error(
+                std::format("getpeername failed: {}", std::strerror(errno)));
+        }
+        if (address.ss_family == AF_UNIX)
+            return "local";
+
+        char host[NI_MAXHOST]{};
+        char service[NI_MAXSERV]{};
+        const int result = getnameinfo(
+            reinterpret_cast<const sockaddr *>(&address),
+            address_size,
+            host,
+            sizeof(host),
+            service,
+            sizeof(service),
+            NI_NUMERICHOST | NI_NUMERICSERV);
+        if (result != 0)
+            throw std::runtime_error(
+                std::format("getnameinfo failed: {}", gai_strerror(result)));
+        return std::format("{}:{}", host, service);
+    }
+
+    void log_client_action(
+        std::string_view client,
+        std::string_view action,
+        std::string_view key,
+        std::string_view value = {})
+    {
+        static std::mutex log_mutex;
+        const std::lock_guard lock{log_mutex};
+        if (action == "SET")
+        {
+            std::fprintf(
+                stdout,
+                "Client %.*s: SET %.*s = %.*s\n",
+                static_cast<int>(client.size()),
+                client.data(),
+                static_cast<int>(key.size()),
+                key.data(),
+                static_cast<int>(value.size()),
+                value.data());
+        }
+        else if (action == "GET")
+        {
+            std::fprintf(
+                stdout,
+                "Client %.*s: GET %.*s -> %.*s\n",
+                static_cast<int>(client.size()),
+                client.data(),
+                static_cast<int>(key.size()),
+                key.data(),
+                static_cast<int>(value.size()),
+                value.data());
+        }
+        else
+        {
+            std::fprintf(
+                stdout,
+                "Client %.*s: DEL %.*s\n",
+                static_cast<int>(client.size()),
+                client.data(),
+                static_cast<int>(key.size()),
+                key.data());
+        }
+        std::fflush(stdout);
+    }
+
+    void execute_line(
+        std::string_view line,
+        Istore &store,
+        int client_socket,
+        std::string_view client)
     {
         try
         {
@@ -102,24 +187,30 @@ namespace
             for (const auto &command : commands)
             {
                 const auto response = std::visit(
-                    [&store](const auto &parsed) -> std::string
+                    [&store, client](const auto &parsed) -> std::string
                     {
                         using T = std::decay_t<decltype(parsed)>;
                         if constexpr (std::is_same_v<T, SetCommand>)
                         {
                             store.set(parsed.key, parsed.value);
+                            log_client_action(client, "SET", parsed.key, parsed.value);
                             return "OK\n";
                         }
                         else if constexpr (std::is_same_v<T, GetCommand>)
                         {
                             const auto value = store.get(parsed.key);
+                            log_client_action(
+                                client,
+                                "GET",
+                                parsed.key,
+                                value ? *value : "NOT_FOUND");
                             return value ? "VALUE " + *value + "\n" : "NOT_FOUND\n";
                         }
                         else
                         {
-                            return store.erase(parsed.key)
-                                       ? "OK\n"
-                                       : "NOT_FOUND\n";
+                            const bool erased = store.erase(parsed.key);
+                            log_client_action(client, "DEL", parsed.key);
+                            return erased ? "OK\n" : "NOT_FOUND\n";
                         }
                     },
                     command);
@@ -131,10 +222,19 @@ namespace
             send_all(client_socket, std::format("ERR {}\n", error.what()));
         }
     }
+
+    void log_client_served()
+    {
+        static std::mutex log_mutex;
+        const std::lock_guard lock{log_mutex};
+        std::fprintf(stdout, "Client served\n");
+        std::fflush(stdout);
+    }
 }
 
 void serve_client(int client_socket, Istore &store)
 {
+    const std::string client = client_details(client_socket);
     std::array<char, 4096> received{};
     std::string pending;
     bool discard_oversized_line = false;
@@ -168,7 +268,7 @@ void serve_client(int client_socket, Istore &store)
 
             if (byte == '\n')
             {
-                execute_line(pending, store, client_socket);
+                execute_line(pending, store, client_socket, client);
                 pending.clear();
                 continue;
             }
@@ -247,14 +347,19 @@ void start_server(Istore &store, std::uint16_t port)
                 std::format("accept failed: {}", std::strerror(errno)));
         }
 
-        Socket client_socket{client};
-        try
-        {
-            serve_client(client_socket.get(), store);
-        }
-        catch (const std::exception &error)
-        {
-            std::fprintf(stderr, "Client connection failed: %s\n", error.what());
-        }
+        std::thread{
+            [client, &store]
+            {
+                Socket client_socket{client};
+                try
+                {
+                    serve_client(client_socket.get(), store);
+                }
+                catch (const std::exception &error)
+                {
+                    std::fprintf(stderr, "Client connection failed: %s\n", error.what());
+                }
+                log_client_served();
+            }}.detach();
     }
 }

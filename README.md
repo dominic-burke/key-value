@@ -155,7 +155,8 @@ After building, run the `key-value` executable. For example, on Linux:
 ```
 
 The server stores data in `store.log` in its working directory. It listens on
-TCP port 3490 and handles one client at a time. For example, with `nc`:
+TCP port 3490 and handles each client connection in its own worker thread. For
+example, with `nc`:
 
 ```sh
 printf 'SET color blue\nGET color\nDEL color\n' | nc 127.0.0.1 3490

@@ -8,17 +8,20 @@ PersistentStore::PersistentStore(const std::filesystem::path &path)
 
 void PersistentStore::set(const std::string &key, const std::string &value)
 {
+    std::unique_lock lock{mutex_};
     log_.append_set(key, value);
     store_.set(key, value);
 }
 
 auto PersistentStore::get(const std::string &key) const -> std::optional<std::string>
 {
+    std::shared_lock lock{mutex_};
     return store_.get(key);
 }
 
 auto PersistentStore::erase(const std::string &key) -> bool
 {
+    std::unique_lock lock{mutex_};
     if (!store_.get(key))
         return false;
     log_.append_delete(key);

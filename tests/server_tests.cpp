@@ -3,13 +3,16 @@
 #include <store.hpp>
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <iostream>
+#include <netinet/in.h>
 #include <string>
 #include <string_view>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 namespace
 {
@@ -133,11 +136,124 @@ namespace
                                                                                         response == "ERR Command line too long\nNOT_FOUND\n",
                                                                                         "rejects oversized line and recovers at next newline");
     }
+
+    bool test_multiple_tcp_clients()
+    {
+        constexpr int client_count = 2048;
+        const int listener = socket(AF_INET, SOCK_STREAM, 0);
+        if (!check(listener != -1, "create TCP listener"))
+            return false;
+
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = 0;
+        if (!check(bind(
+                       listener,
+                       reinterpret_cast<const sockaddr *>(&address),
+                       sizeof(address))
+                       == 0,
+                   "bind TCP listener"))
+        {
+            close(listener);
+            return false;
+        }
+        if (!check(listen(listener, client_count) == 0, "listen for TCP clients"))
+        {
+            close(listener);
+            return false;
+        }
+
+        socklen_t address_size = sizeof(address);
+        if (!check(getsockname(
+                       listener,
+                       reinterpret_cast<sockaddr *>(&address),
+                       &address_size)
+                       == 0,
+                   "get TCP listener port"))
+        {
+            close(listener);
+            return false;
+        }
+
+        ConcurrentStore store;
+        std::atomic<bool> clients_passed{true};
+        std::vector<std::thread> clients;
+        clients.reserve(client_count);
+        for (int index = 0; index < client_count; ++index)
+        {
+            clients.emplace_back(
+                [&, index]
+                {
+                    const int client = socket(AF_INET, SOCK_STREAM, 0);
+                    if (client == -1
+                        || connect(
+                               client,
+                               reinterpret_cast<const sockaddr *>(&address),
+                               sizeof(address))
+                               != 0)
+                    {
+                        clients_passed = false;
+                        if (client != -1)
+                            close(client);
+                        return;
+                    }
+
+                    const std::string key = "client-" + std::to_string(index);
+                    const std::string value = "value-" + std::to_string(index);
+                    const std::string request =
+                        "SET " + key + " " + value + "\nGET " + key + "\n";
+                    if (!send_all(client, request))
+                        clients_passed = false;
+                    shutdown(client, SHUT_WR);
+                    const auto response = read_to_end(client);
+                    if (response != "OK\nVALUE " + value + "\n")
+                        clients_passed = false;
+                    close(client);
+                });
+        }
+
+        std::vector<std::thread> handlers;
+        handlers.reserve(client_count);
+        for (int index = 0; index < client_count; ++index)
+        {
+            const int client = accept(listener, nullptr, nullptr);
+            if (!check(client != -1, "accept concurrent TCP client"))
+            {
+                clients_passed = false;
+                break;
+            }
+            handlers.emplace_back(
+                [client, &store]
+                {
+                    try
+                    {
+                        serve_client(client, store);
+                    }
+                    catch (...)
+                    {
+                    }
+                    close(client);
+                });
+        }
+        close(listener);
+
+        for (auto &client : clients)
+            client.join();
+        for (auto &handler : handlers)
+            handler.join();
+
+        return check(
+            clients_passed && store.size() == client_count,
+            "multiple TCP clients are served concurrently");
+    }
 }
 
 int main()
 {
-    return test_commands_over_socket() && test_oversized_line_does_not_break_connection()
+    return test_commands_over_socket()
+                && test_oversized_line_does_not_break_connection()
+                && test_multiple_tcp_clients()
                ? 0
                : 1;
 }

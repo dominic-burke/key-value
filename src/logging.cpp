@@ -1,13 +1,17 @@
 #include <logging.hpp>
 
 #include <format>
-#include <vector>
+#include <cerrno>
+#include <cstring>
 #include <fstream>
+#include <fcntl.h>
 #include <sstream>
 #include <stdexcept>
-#include <system_error>
-#include <utility>
 #include <store.hpp>
+#include <sys/file.h>
+#include <unistd.h>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -56,7 +60,52 @@ namespace
         if (!out)
             throw std::runtime_error("Failed to flush log record");
     }
+
+    auto acquire_log_lock(const std::filesystem::path &path) -> int
+    {
+        const auto lock_path = path.string() + ".lock";
+        const int descriptor = open(
+            lock_path.c_str(),
+            O_CREAT | O_RDWR | O_CLOEXEC,
+            0644);
+        if (descriptor == -1)
+            throw std::runtime_error(
+                "Failed to open log lock: " + std::string{std::strerror(errno)});
+
+        if (flock(descriptor, LOCK_EX | LOCK_NB) == -1)
+        {
+            const int error_number = errno;
+            const std::string reason = std::strerror(errno);
+            close(descriptor);
+            if (error_number == EWOULDBLOCK)
+                throw std::runtime_error(
+                    "Log is already in use: " + path.string());
+            throw std::runtime_error("Failed to lock log: " + reason);
+        }
+        return descriptor;
+    }
 }
+
+class AppendOnlyLog::Lock
+{
+public:
+    explicit Lock(const std::filesystem::path &path)
+        : descriptor_{acquire_log_lock(path)}
+    {
+    }
+
+    ~Lock()
+    {
+        if (descriptor_ != -1)
+            close(descriptor_);
+    }
+
+    Lock(const Lock &) = delete;
+    auto operator=(const Lock &) -> Lock & = delete;
+
+private:
+    int descriptor_;
+};
 
 CorruptLog::CorruptLog()
     : reason_{"No reason provided"}
@@ -238,11 +287,15 @@ auto read_record(std::istream &in) -> std::optional<LogRecord>
 }
 
 AppendOnlyLog::AppendOnlyLog(std::filesystem::path path)
-    : out_(path, std::ios::binary | std::ios::app), path_{std::move(path)}
+    : lock_{std::make_unique<Lock>(path)},
+      out_(path, std::ios::binary | std::ios::app),
+      path_{std::move(path)}
 {
     if (!out_)
         throw std::runtime_error("AppendOnlyLog failed to open its file path");
 }
+
+AppendOnlyLog::~AppendOnlyLog() = default;
 
 void AppendOnlyLog::append_set(std::string_view key, std::string_view value)
 {
@@ -259,10 +312,12 @@ void AppendOnlyLog::append_delete(std::string_view key)
 void AppendOnlyLog::replay(Istore &store)
 {
     out_.flush();
-    if (!out_) throw std::runtime_error("Failed to flush out_");
+    if (!out_)
+        throw std::runtime_error("Failed to flush out_");
 
     std::ifstream in(path_, std::ios::binary);
-    if (!in) return;
+    if (!in)
+        return;
 
     std::streamoff last_complete_record_end = 0;
     for (;;)
@@ -299,17 +354,15 @@ void AppendOnlyLog::replay(Istore &store)
 
         switch (record->opcode)
         {
-            case OpCode::Set:
-                store.set(
-                    record->key,
-                    record->value
-                );
-                break;
-            case OpCode::Delete:
-                store.erase(
-                    record->key
-                );
-                break;
+        case OpCode::Set:
+            store.set(
+                record->key,
+                record->value);
+            break;
+        case OpCode::Delete:
+            store.erase(
+                record->key);
+            break;
         }
     }
 }

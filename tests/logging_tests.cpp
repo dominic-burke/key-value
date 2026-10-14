@@ -16,13 +16,7 @@ namespace
     public:
         TemporaryLog()
             : path_{
-                  std::filesystem::temp_directory_path()
-                  / ("key_value_logging_"
-                     + std::to_string(
-                         std::chrono::steady_clock::now()
-                             .time_since_epoch()
-                             .count())
-                     + ".log")}
+                  std::filesystem::temp_directory_path() / ("key_value_logging_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".log")}
         {
         }
 
@@ -30,6 +24,7 @@ namespace
         {
             std::error_code error;
             std::filesystem::remove(path_, error);
+            std::filesystem::remove(path_.string() + ".lock", error);
         }
 
         auto path() const -> const std::filesystem::path &
@@ -120,7 +115,8 @@ namespace
         const auto bytes = make_record_bytes(
             static_cast<std::uint8_t>(OpCode::Set), 0, 1, {}, "v");
         return check(
-            throws<CorruptLog>([&] { read_bytes(bytes); }),
+            throws<CorruptLog>([&]
+                               { read_bytes(bytes); }),
             "empty key is rejected");
     }
 
@@ -129,7 +125,8 @@ namespace
         const auto bytes = make_record_bytes(
             static_cast<std::uint8_t>(OpCode::Set), 1, 0, "k");
         return check(
-            throws<CorruptLog>([&] { read_bytes(bytes); }),
+            throws<CorruptLog>([&]
+                               { read_bytes(bytes); }),
             "empty set value is rejected");
     }
 
@@ -161,8 +158,7 @@ namespace
             LogRecord{OpCode::Delete, "k", {}});
         const auto record = read_bytes(bytes);
         return check(
-            record && record->opcode == OpCode::Delete
-                && record->key == "k" && record->value.empty(),
+            record && record->opcode == OpCode::Delete && record->key == "k" && record->value.empty(),
             "delete record with empty value is accepted");
     }
 
@@ -170,7 +166,8 @@ namespace
     {
         const auto bytes = make_record_bytes(0x7f, 1, 1, "k", "v");
         return check(
-            throws<CorruptLog>([&] { read_bytes(bytes); }),
+            throws<CorruptLog>([&]
+                               { read_bytes(bytes); }),
             "unknown opcode is rejected");
     }
 
@@ -180,7 +177,8 @@ namespace
             static_cast<std::uint8_t>(OpCode::Set), 1, 1, "k", "v");
         bytes[0] = 'X';
         return check(
-            throws<CorruptLog>([&] { read_bytes(bytes); }),
+            throws<CorruptLog>([&]
+                               { read_bytes(bytes); }),
             "bad magic is rejected");
     }
 
@@ -190,7 +188,8 @@ namespace
             static_cast<std::uint8_t>(OpCode::Set), 1, 1, "k", "v");
         bytes[4] = static_cast<char>(VERSION + 1);
         return check(
-            throws<CorruptLog>([&] { read_bytes(bytes); }),
+            throws<CorruptLog>([&]
+                               { read_bytes(bytes); }),
             "unsupported version is rejected");
     }
 
@@ -199,7 +198,8 @@ namespace
         const auto bytes = make_record_bytes(
             static_cast<std::uint8_t>(OpCode::Set), MAX_KEY_SIZE + 1, 1);
         return check(
-            throws<CorruptLog>([&] { read_bytes(bytes); }),
+            throws<CorruptLog>([&]
+                               { read_bytes(bytes); }),
             "oversized key length is rejected");
     }
 
@@ -208,7 +208,8 @@ namespace
         const auto bytes = make_record_bytes(
             static_cast<std::uint8_t>(OpCode::Set), 1, MAX_VALUE_SIZE + 1);
         return check(
-            throws<CorruptLog>([&] { read_bytes(bytes); }),
+            throws<CorruptLog>([&]
+                               { read_bytes(bytes); }),
             "oversized value length is rejected");
     }
 
@@ -217,7 +218,8 @@ namespace
         auto bytes = serialize_record(LogRecord{OpCode::Set, "k", "v"});
         bytes[14] ^= 1;
         return check(
-            throws<CorruptLog>([&] { read_bytes(bytes); }),
+            throws<CorruptLog>([&]
+                               { read_bytes(bytes); }),
             "checksum mismatch is rejected");
     }
 
@@ -231,23 +233,46 @@ namespace
         const std::string oversized_value(MAX_VALUE_SIZE + 1, 'v');
 
         const bool rejected = throws<CorruptLog>(
-                                  [&] { log.append_set({}, "value"); })
-            && throws<CorruptLog>(
-                [&] { log.append_set("key", {}); })
-            && throws<CorruptLog>(
-                [&] { log.append_set(oversized_key, "value"); })
-            && throws<CorruptLog>(
-                [&] { log.append_set("key", oversized_value); })
-            && throws<CorruptLog>(
-                [&] { log.append_delete({}); })
-            && throws<CorruptLog>(
-                [&] { log.append_delete(oversized_key); });
+                                  [&]
+                                  { log.append_set({}, "value"); }) &&
+                              throws<CorruptLog>(
+                                  [&]
+                                  { log.append_set("key", {}); }) &&
+                              throws<CorruptLog>(
+                                  [&]
+                                  { log.append_set(oversized_key, "value"); }) &&
+                              throws<CorruptLog>(
+                                  [&]
+                                  { log.append_set("key", oversized_value); }) &&
+                              throws<CorruptLog>(
+                                  [&]
+                                  { log.append_delete({}); }) &&
+                              throws<CorruptLog>(
+                                  [&]
+                                  { log.append_delete(oversized_key); });
 
         return check(
-            rejected
-                && std::filesystem::file_size(temporary_log.path())
-                    == valid_log_size,
+            rejected && std::filesystem::file_size(temporary_log.path()) == valid_log_size,
             "append methods reject invalid records before writing");
+    }
+
+    bool test_log_allows_only_one_instance()
+    {
+        TemporaryLog temporary_log;
+        {
+            AppendOnlyLog first{temporary_log.path()};
+            const bool rejected = throws<std::runtime_error>(
+                [&]
+                { AppendOnlyLog second{temporary_log.path()}; });
+            if (!check(rejected, "second log instance is rejected"))
+                return false;
+        }
+
+        AppendOnlyLog reopened{temporary_log.path()};
+        reopened.append_set("key", "value");
+        return check(
+            std::filesystem::file_size(temporary_log.path()) > 0,
+            "log lock is released when the owner is destroyed");
     }
 }
 
@@ -268,5 +293,8 @@ int main()
     passed &= run_test(
         "append validates before writing",
         test_append_rejects_invalid_records_before_writing);
+    passed &= run_test(
+        "single log instance",
+        test_log_allows_only_one_instance);
     return passed ? 0 : 1;
 }

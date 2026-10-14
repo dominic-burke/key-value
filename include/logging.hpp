@@ -8,6 +8,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -62,6 +63,12 @@ class AppendOnlyLog
 {
 public:
     explicit AppendOnlyLog(std::filesystem::path path);
+    ~AppendOnlyLog();
+
+    AppendOnlyLog(const AppendOnlyLog &) = delete;
+    auto operator=(const AppendOnlyLog &) -> AppendOnlyLog & = delete;
+    AppendOnlyLog(AppendOnlyLog &&) = delete;
+    auto operator=(AppendOnlyLog &&) -> AppendOnlyLog & = delete;
 
     void append_set(std::string_view key, std::string_view value);
 
@@ -70,6 +77,8 @@ public:
     void replay(Istore &istore);
 
 private:
+    class Lock;
+    std::unique_ptr<Lock> lock_;
     std::ofstream out_;
     std::filesystem::path path_;
 };

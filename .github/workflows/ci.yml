@@ -38,3 +38,28 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  thread-sanitizer:
+    name: ThreadSanitizer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -S . -B build-tsan
+          -DCMAKE_BUILD_TYPE=Debug
+          -DKV_ENABLE_TSAN_TESTS=ON
+
+      - name: Build ThreadSanitizer tests
+        run: cmake --build build-tsan --target kv_server_tsan_tests --parallel
+
+      - name: Run ThreadSanitizer tests
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: >
+          ctest --test-dir build-tsan
+          --tests-regex '^kv_server_tsan_tests$'
+          --output-on-failure

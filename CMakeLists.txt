@@ -8,6 +8,7 @@ project(key_value LANGUAGES CXX)
 
 set(CMAKE_CXX_EXTENSIONS OFF)
 include(CTest)
+option(KV_ENABLE_TSAN_TESTS "Build and register ThreadSanitizer tests" OFF)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
@@ -51,6 +52,24 @@ if(BUILD_TESTING)
     add_executable(kv_server_tests tests/server_tests.cpp)
     target_link_libraries(kv_server_tests PRIVATE kv_server kv_store Threads::Threads)
     add_test(NAME kv_server_tests COMMAND kv_server_tests)
+
+    if(KV_ENABLE_TSAN_TESTS)
+        set(KV_TSAN_FLAGS -fsanitize=thread -fno-omit-frame-pointer)
+        foreach(target kv_store kv_command_parser kv_server)
+            target_compile_options(${target} PRIVATE ${KV_TSAN_FLAGS})
+        endforeach()
+
+        add_executable(kv_server_tsan_tests tests/server_tests.cpp)
+        target_compile_options(kv_server_tsan_tests PRIVATE ${KV_TSAN_FLAGS})
+        target_link_options(kv_server_tsan_tests PRIVATE ${KV_TSAN_FLAGS})
+        target_link_libraries(
+            kv_server_tsan_tests
+            PRIVATE
+                kv_server
+                kv_store
+                Threads::Threads)
+        add_test(NAME kv_server_tsan_tests COMMAND kv_server_tsan_tests)
+    endif()
 
     add_executable(kv_persistent_store_tests tests/persistent_store_tests.cpp)
     target_link_libraries(kv_persistent_store_tests PRIVATE kv_persistent_store)
